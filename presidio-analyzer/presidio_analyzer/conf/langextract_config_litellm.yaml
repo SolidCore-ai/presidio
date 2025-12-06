@@ -1,0 +1,88 @@
+# Configurable LangExtract Configuration
+# Supports multiple LLM providers via LangExtract's ModelConfig
+
+lm_recognizer:
+  supported_entities:
+    - PERSON
+    - EMAIL_ADDRESS
+    - PHONE_NUMBER
+    - US_SSN
+    - LOCATION
+    - ORGANIZATION
+    - DATE_TIME
+    - CREDIT_CARD
+    - IP_ADDRESS
+    - URL
+
+  labels_to_ignore:
+    - payment_status
+    - metadata
+    - annotation
+
+  enable_generic_consolidation: true
+  min_score: 0.5
+
+langextract:
+  prompt_file: "presidio_analyzer/conf/langextract_prompts/default_pii_phi_prompt.j2"
+  examples_file: "presidio_analyzer/conf/langextract_prompts/default_pii_phi_examples.yaml"
+
+  model:
+    # Model identifier - must be prefixed with "litellm/" for litellm provider
+    model_id: "litellm/ollama/qwen2.5:1.5b"
+
+    # Provider class name for langextract-litellm
+    provider: "LiteLLMLanguageModel"
+
+    # Temperature for generation (optional)
+    temperature: null
+
+    # Provider-specific configuration (optional for most providers)
+    provider_kwargs: {}
+
+    # --- Alternative configurations ---
+    #
+    # For native Ollama (without LiteLLM):
+    #   model_id: "qwen2.5:1.5b"
+    #   provider: "ollama"
+    #   provider_kwargs:
+    #     model_url: "http://localhost:11434"
+    #
+    # For OpenAI:
+    #   model_id: "gpt-4o-mini"
+    #   provider: "openai"
+    #   provider_kwargs:
+    #     api_key: "sk-..."  # or use OPENAI_API_KEY env var
+    #
+    # For OpenAI-compatible API (Azure, local server, LiteLLM proxy):
+    #   model_id: "gpt-4o-mini"
+    #   provider: "openai"
+    #   provider_kwargs:
+    #     base_url: "http://localhost:4000"
+    #     api_key: "your-api-key"
+
+    #
+    # --- LiteLLM Provider (requires: pip install langextract-litellm) ---
+    # See: https://github.com/JustStas/langextract-litellm
+    # Supports 100+ LLM providers via unified API
+    #
+    # IMPORTANT: model_id MUST be prefixed with "litellm/"
+    #
+    # LiteLLM with Ollama:
+    #   model_id: "litellm/ollama/qwen2.5:1.5b"
+    #   provider: "LiteLLMLanguageModel"
+  
+
+
+  entity_mappings:
+    person: PERSON
+    name: PERSON
+    email: EMAIL_ADDRESS
+    phone: PHONE_NUMBER
+    ssn: US_SSN
+    location: LOCATION
+    address: LOCATION
+    organization: ORGANIZATION
+    date: DATE_TIME
+    credit_card: CREDIT_CARD
+    ip_address: IP_ADDRESS
+    url: URL

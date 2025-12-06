@@ -18,80 +18,80 @@ recognizers:
     - language: en
       context: [credit, card, visa, mastercard, cc, amex, discover, jcb, diners, maestro, instapayment]
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: UsBankRecognizer
     supported_languages: 
     - en
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: UsLicenseRecognizer
     supported_languages: 
     - en
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: UsItinRecognizer
     supported_languages: 
     - en
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: UsPassportRecognizer
     supported_languages: 
     - en
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: UsSsnRecognizer
     supported_languages: 
     - en
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: NhsRecognizer
     supported_languages:
     - en
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: CryptoRecognizer
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: DateRecognizer
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: EmailRecognizer
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: IbanRecognizer
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: IpRecognizer
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: MedicalLicenseRecognizer
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: PhoneRecognizer
     type: predefined
-    enabled: true
+    enabled: false
 
   - name: UrlRecognizer
     type: predefined
-    enabled: true
+    enabled: false
 
   # NLP recognizer
   - name: SpacyRecognizer
     type: predefined
-    enabled: true
+    enabled: false
 
   # gliner recognizer
   - name: GLiNERRecognizer
@@ -110,5 +110,5 @@ recognizers:
     supported_languages:
       - en
     type: predefined
-    enabled: false
-    config_path: presidio-analyzer/presidio_analyzer/conf/langextract_config_litellm_scai.yaml
+    enabled: true
+    config_path: presidio_analyzer/conf/langextract_config_litellm.yaml
