@@ -28,16 +28,20 @@ langextract:
 
   model:
     # Model identifier - must be prefixed with "litellm/" for litellm provider
-    model_id: "litellm/ollama/qwen2.5:1.5b"
+    model_id: "ollama/qwen2.5:1.5b"
 
     # Provider class name for langextract-litellm
-    provider: "LiteLLMLanguageModel"
+    provider: "openai"
 
     # Temperature for generation (optional)
     temperature: null
 
     # Provider-specific configuration (optional for most providers)
-    provider_kwargs: {}
+    # Use host.docker.internal to reach host machine from Docker container
+    # Use localhost when running locally (not in Docker)
+    provider_kwargs:
+      base_url: "http://host.docker.internal:4100"
+      api_key: "placeholder"
 
     # --- Alternative configurations ---
     #

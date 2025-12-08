@@ -12,7 +12,7 @@ except ImportError:
     lx_factory = None  # type: ignore[misc,assignment]
     lx_router = None  # type: ignore[misc,assignment]
     lx_builtin = None  # type: ignore[misc,assignment]
-import langextract_litellm
+
 
 from presidio_analyzer.predefined_recognizers.third_party.\
     langextract_recognizer import LangExtractRecognizer
@@ -147,7 +147,3 @@ class ConfigurableLangExtractRecognizer(LangExtractRecognizer):
                 self.provider, self.model_id
             )
             raise
-
-
-# Alias for backward compatibility
-LitellmLangExtractRecognizer = ConfigurableLangExtractRecognizer

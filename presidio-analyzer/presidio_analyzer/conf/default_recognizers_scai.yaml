@@ -106,7 +106,7 @@ recognizers:
     threshold: 0.85
 
   # LLM recognizer
-  - name: LiteLLMLangExtractRecognizer
+  - name: ConfigurableLangExtractRecognizer
     supported_languages:
       - en
     type: predefined
