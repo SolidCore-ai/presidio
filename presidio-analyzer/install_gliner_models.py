@@ -2,10 +2,6 @@
 
 import argparse
 import logging
-from typing import Dict, Union
-
-import yaml
-from spacy.cli import download as spacy_download
 
 from gliner import GLiNER
 

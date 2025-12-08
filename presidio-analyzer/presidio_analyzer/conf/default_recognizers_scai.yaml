@@ -99,7 +99,7 @@ recognizers:
       - en
     type: predefined
     enabled: false
-    model_name: "nvidia/gliner-pii"
+    model_name: "urchade/gliner_multi_pii-v1"
     flat_ner: false
     multi_label: true
     map_location: "cpu"
