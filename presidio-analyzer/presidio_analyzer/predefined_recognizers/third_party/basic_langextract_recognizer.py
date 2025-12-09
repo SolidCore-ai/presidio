@@ -49,6 +49,9 @@ class BasicLangExtractRecognizer(LangExtractRecognizer):
         if not self.provider:
             raise ValueError("Configuration must contain 'provider'")
 
+        self.fence_output = model_config.get("fence_output", "openai" in self.provider.lower())
+        self.use_schema_constraints = model_config.get("use_schema_constraints", False)
+
         self.lx_model_config = lx_factory.ModelConfig(
             model_id=self.model_id,
             provider=self.provider,
@@ -62,10 +65,15 @@ class BasicLangExtractRecognizer(LangExtractRecognizer):
                 "text_or_documents": kwargs.pop("text"),
                 "prompt_description": kwargs.pop("prompt"),
                 "examples": kwargs.pop("examples"),
-                "config": self.lx_model_config
+                "config": self.lx_model_config,
+                "fence_output": self.fence_output,
+                "use_schema_constraints": self.use_schema_constraints
             }
 
             extract_params.update(kwargs)
+
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Calling LangExtract with params: %s", extract_params)
 
             return lx.extract(**extract_params)
         except Exception:
