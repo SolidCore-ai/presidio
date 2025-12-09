@@ -317,6 +317,12 @@ class RecognizerListLoader:
                     recognizer_cls = RecognizerListLoader.get_existing_recognizer_cls(
                         recognizer_name=recognizer_name
                     )
+                    # Prepare kwargs, converting supported_entities
+                    # to supported_entity if needed
+                    kwargs = RecognizerListLoader._prepare_recognizer_kwargs(
+                        new_conf, language_conf, recognizer_cls
+                    )
+
                     try:
                         recognizer_instances.append(recognizer_cls(**kwargs))
                     except Exception as e:
@@ -324,13 +330,6 @@ class RecognizerListLoader:
                         logger.error(f"Error: {str(e)}")
                         raise e
 
-                    # Prepare kwargs, converting supported_entities
-                    # to supported_entity if needed
-                    kwargs = RecognizerListLoader._prepare_recognizer_kwargs(
-                        new_conf, language_conf, recognizer_cls
-                    )
-
-                    recognizer_instances.append(recognizer_cls(**kwargs))
 
         for recognizer_conf in custom:
             if RecognizerListLoader.is_recognizer_enabled(recognizer_conf):
