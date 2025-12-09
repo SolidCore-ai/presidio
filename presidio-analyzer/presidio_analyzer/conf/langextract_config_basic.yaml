@@ -27,11 +27,11 @@ langextract:
   examples_file: "presidio_analyzer/conf/langextract_prompts/default_pii_phi_examples.yaml"
 
   model:
-    model_id: "ollama/gemma3:1b"
+    model_id: "gpt-4o"
     provider:
       name: "openai"
       kwargs:
-        base_url: "http://host.docker.internal:4000"
+        base_url: "https://api.openai.com/v1"
         api_key: "API_KEY_GOES_HERE"
 
   entity_mappings:
