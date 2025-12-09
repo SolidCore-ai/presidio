@@ -32,7 +32,7 @@ langextract:
       name: "openai"
       kwargs:
         base_url: "https://api.openai.com/v1"
-        api_key: "API_KEY_GOES_HERE"
+        # api_key: "API_KEY_GOES_HERE" or set env OPENAI_API_KEY
 
   entity_mappings:
     person: PERSON
