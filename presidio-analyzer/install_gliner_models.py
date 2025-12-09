@@ -25,7 +25,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Install gliner models into the presidio-analyzer Docker container"
     )
-    parser.add_argument("--models", help="model(s) to install", type=str, nargs="+", default="urchade/gliner_multi_pii-v1")
+    parser.add_argument("--models", help="model(s) to install", type=str, nargs="+", default=["urchade/gliner_multi_pii-v1"])
     args = parser.parse_args()
 
     for model in args.models:
