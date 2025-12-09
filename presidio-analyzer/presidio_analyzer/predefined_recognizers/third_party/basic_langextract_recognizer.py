@@ -76,7 +76,6 @@ class BasicLangExtractRecognizer(LangExtractRecognizer):
 
             extract_params.update(kwargs)
 
-
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Calling LangExtract with params: %s", extract_params)
 
