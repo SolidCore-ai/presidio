@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -52,6 +53,9 @@ class BasicLangExtractRecognizer(LangExtractRecognizer):
         self.fence_output = model_config.get("fence_output", "openai" in self.provider.lower())
         self.use_schema_constraints = model_config.get("use_schema_constraints", False)
 
+        if "api_key" not in self.provider_kwargs and "LANGEXTRACT_API_KEY" in os.environ:
+            self.provider_kwargs["api_key"] = os.environ["LANGEXTRACT_API_KEY"]
+
         self.lx_model_config = lx_factory.ModelConfig(
             model_id=self.model_id,
             provider=self.provider,
@@ -71,6 +75,7 @@ class BasicLangExtractRecognizer(LangExtractRecognizer):
             }
 
             extract_params.update(kwargs)
+
 
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Calling LangExtract with params: %s", extract_params)
