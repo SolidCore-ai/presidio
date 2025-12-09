@@ -317,6 +317,7 @@ class RecognizerListLoader:
                     recognizer_cls = RecognizerListLoader.get_existing_recognizer_cls(
                         recognizer_name=recognizer_name
                     )
+
                     # Prepare kwargs, converting supported_entities
                     # to supported_entity if needed
                     kwargs = RecognizerListLoader._prepare_recognizer_kwargs(
