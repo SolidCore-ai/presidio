@@ -147,12 +147,6 @@ def test_ollama_recognizer_loads_from_yaml_configuration_when_enabled():
         os.path.dirname(__file__), "..", "resources", "test_ollama_enabled_recognizers.yaml"
     )
 
-    from langextract.providers.router import list_providers
-    print(list_providers())
-
-    from langextract.plugins import available_providers
-    print(available_providers())
-    
     provider = RecognizerRegistryProvider(conf_file=config_path)
     registry = provider.create_recognizer_registry()
     
