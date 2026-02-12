@@ -69,12 +69,14 @@ class TestBasicLangExtractRecognizerInitialization:
         import yaml
         
         config = create_test_config(
+            suonfig = create_test_config(
             supported_entities=["PERSON", "EMAIL_ADDRESS"],
             entity_mappings={"person": "PERSON", "email": "EMAIL_ADDRESS"},
             model_id="qwen2.5:1.5b",
             model_url="http://localhost:11434",
             temperature=0.0,
             min_score=0.5
+        )5
         )
 
         config_file = tmp_path / "test_config.yaml"
