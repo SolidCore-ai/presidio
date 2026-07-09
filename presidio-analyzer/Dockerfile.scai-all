@@ -3,7 +3,7 @@ FROM python:3.12-slim
 ARG NLP_CONF_FILE=presidio_analyzer/conf/default.yaml
 ARG ANALYZER_CONF_FILE=presidio_analyzer/conf/default_analyzer.yaml
 ARG RECOGNIZER_REGISTRY_CONF_FILE=presidio_analyzer/conf/default_recognizers.yaml
-ARG GLINER_MODELS="nvidia/gliner-pii urchade/gliner_multi_pii-v1"
+ARG GLINER_MODELS="nvidia/gliner-pii"
 ENV PIP_NO_CACHE_DIR=1
 ENV POETRY_VIRTUALENVS_CREATE=false
 
@@ -22,6 +22,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY ./pyproject.toml /app/
+COPY ./poetry.lock /app/
 
 RUN pip install poetry \
     && poetry install --no-root --only=main -E server -E gliner -E langextract \
