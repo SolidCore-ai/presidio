@@ -71,8 +71,8 @@ langextract = [
     "jinja2 (>=3.0.0)",
 ]
 
-# CPU-only wheels avoid torch's Linux CUDA/nvidia-* dependency tree, which otherwise
-# blows up poetry lock resolution times. Revisit if GPU acceleration is needed.
+# CPU-only wheels avoid torch's Linux CUDA/nvidia-* dependency tree, which is
+# causing poetry lock resolution failures. Revisit if GPU acceleration is needed.
 [[tool.poetry.source]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
