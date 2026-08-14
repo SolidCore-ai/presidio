@@ -5,7 +5,8 @@ ARG ANALYZER_CONF_FILE=presidio_analyzer/conf/default_analyzer.yaml
 ARG RECOGNIZER_REGISTRY_CONF_FILE=presidio_analyzer/conf/default_recognizers.yaml
 ARG GLINER_MODELS="nvidia/gliner-pii"
 ENV PIP_NO_CACHE_DIR=1
-ENV POETRY_VIRTUALENVS_CREATE=false
+# Install the locked dependencies into the system environment (no venv).
+ENV UV_PROJECT_ENVIRONMENT=/usr/local
 
 ENV ANALYZER_CONF_FILE=${ANALYZER_CONF_FILE}
 ENV RECOGNIZER_REGISTRY_CONF_FILE=${RECOGNIZER_REGISTRY_CONF_FILE}
@@ -21,23 +22,26 @@ RUN apt-get update \
   && apt-get install curl --no-install-recommends -y \
   && rm -rf /var/lib/apt/lists/*
 
-COPY ./pyproject.toml /app/
-COPY ./poetry.lock /app/
+COPY ./pyproject.toml ./uv.lock /app/
 
-RUN pip install poetry \
-    && poetry install --no-root --only=main -E server -E gliner -E langextract \
-    && rm -rf $(poetry config cache-dir)
-    
+# Install exactly the locked dependency graph (main + the extras this image
+# serves, no dev group, project itself not installed — it is run from the
+# copied source). Splitting this from the source COPY keeps the dependency
+# layer cached until pyproject.toml/uv.lock change.
+RUN pip install uv==0.11.6 \
+    && uv sync --locked --no-cache --no-default-groups \
+        --extra server --extra gliner --extra langextract \
+        --no-install-project
+
 COPY ${NLP_CONF_FILE} /app/${NLP_CONF_FILE}
 COPY install_*.py /app/
 
-WORKDIR /app
-RUN poetry run python install_nlp_models.py --conf_file ${NLP_CONF_FILE}
+RUN python install_nlp_models.py --nlp_conf_file ${NLP_CONF_FILE}
 
 # Create a non-root user and set ownership
 RUN useradd -m -u 1001 presidio && chown -R presidio:presidio /app
 USER 1001
-RUN poetry run python install_gliner_models.py --models ${GLINER_MODELS}
+RUN python install_gliner_models.py --models ${GLINER_MODELS}
 
 COPY . /app/
 USER 0
