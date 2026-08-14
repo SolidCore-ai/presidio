@@ -1,17 +1,34 @@
 # ---------------------------------------------------------------------------
+# base — shared by builder and runtime so both resolve the identical
+# wolfi-base and the identical python build. The venv in /opt/venv records the
+# interpreter path, so the two stages have to agree on it.
+#
+# Deliberately unpinned: Wolfi rebuilds continuously and the point of moving
+# here is to inherit those rebuilds. Digest pinning is tracked separately.
+# ---------------------------------------------------------------------------
+FROM cgr.dev/chainguard/wolfi-base:latest AS base
+
+# python-3.12 matches the interpreter the lock was resolved against
+# (uv.lock: requires-python >=3.10,<3.15). libstdc++ is needed by the torch and
+# onnxruntime manylinux wheels.
+RUN apk add --no-cache python-3.12 libstdc++
+
+# ---------------------------------------------------------------------------
 # builder — resolves the locked dependency graph and downloads models.
 # Nothing from this stage ships except what the runtime stage explicitly COPYs.
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim AS builder
+FROM base AS builder
 
 ARG NLP_CONF_FILE=presidio_analyzer/conf/default.yaml
 ARG GLINER_MODELS="nvidia/gliner-pii"
 
-ENV PIP_NO_CACHE_DIR=1
-# Install into the system environment (no venv) so the whole tree can be
-# copied forward as a unit.
-ENV UV_PROJECT_ENVIRONMENT=/usr/local
-# Deterministic model cache; relocated to the runtime user's home below.
+# uv as a binary rather than `pip install uv` — one less thing installed into
+# the environment being copied.
+COPY --from=ghcr.io/astral-sh/uv:0.11.6 /uv /usr/local/bin/uv
+
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
 ENV HF_HOME=/opt/hf-cache
 ENV NLP_CONF_FILE=${NLP_CONF_FILE}
 
@@ -23,33 +40,25 @@ COPY ./pyproject.toml ./uv.lock /app/
 # serves, no dev group, project itself not installed — it is run from the
 # copied source). Splitting this from the source COPY keeps the dependency
 # layer cached until pyproject.toml/uv.lock change.
-RUN pip install uv==0.11.6 \
-    && uv sync --locked --no-cache --no-default-groups \
+RUN uv sync --locked --no-cache --no-default-groups \
         --extra server --extra gliner --extra langextract \
         --no-install-project
 
 COPY ${NLP_CONF_FILE} /app/${NLP_CONF_FILE}
 COPY install_*.py /app/
 
-# spacy_download() shells out to pip, so pip must still be present here.
-RUN python install_nlp_models.py --nlp_conf_file ${NLP_CONF_FILE}
-RUN python install_gliner_models.py --models ${GLINER_MODELS}
-
-# Drop the build tooling before it can be copied forward. uv is a Rust binary
-# whose vendored crate graph is scanned as part of the image (astral-tokio-tar,
-# rustls-webpki, rkyv, quinn-proto and friends); pip carries its own
-# advisories. Neither is invoked at runtime — entrypoint.sh only execs gunicorn.
-RUN rm -rf /usr/local/bin/uv /usr/local/bin/uvx \
-           /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.* \
-           /usr/local/lib/python3.*/site-packages/pip \
-           /usr/local/lib/python3.*/site-packages/pip-*.dist-info \
-           /usr/local/lib/python3.*/site-packages/uv \
-           /usr/local/lib/python3.*/site-packages/uv-*.dist-info
+# spacy_download() shells out to `sys.executable -m pip`, which is the venv's
+# interpreter — and uv creates venvs without pip. Add it just for the model
+# install and drop it in the same layer, so it is never copied into runtime.
+RUN uv pip install --no-cache pip \
+    && python install_nlp_models.py --nlp_conf_file ${NLP_CONF_FILE} \
+    && python install_gliner_models.py --models ${GLINER_MODELS} \
+    && uv pip uninstall pip
 
 # ---------------------------------------------------------------------------
 # runtime
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim AS runtime
+FROM base AS runtime
 
 ARG NLP_CONF_FILE=presidio_analyzer/conf/default.yaml
 ARG ANALYZER_CONF_FILE=presidio_analyzer/conf/default_analyzer.yaml
@@ -61,28 +70,15 @@ ENV NLP_CONF_FILE=${NLP_CONF_FILE}
 
 ENV PORT=3000
 ENV WORKERS=1
-ENV HF_HOME=/home/presidio/.cache/huggingface
+ENV HF_HOME=/opt/hf-cache
+ENV PATH="/opt/venv/bin:${PATH}"
 
-# curl is required by HEALTHCHECK below.
-#
-# pip is removed here as well as in the builder: COPY overlays rather than
-# replaces, so the base image's own copy would otherwise survive the
-# COPY --from=builder /usr/local below.
-RUN apt-get update \
-  && apt-get install curl --no-install-recommends -y \
-  && rm -rf /var/lib/apt/lists/* \
-  && rm -rf /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.* \
-            /usr/local/lib/python3.*/site-packages/pip \
-            /usr/local/lib/python3.*/site-packages/pip-*.dist-info
+RUN addgroup -S presidio && adduser -S -D -H -u 1001 -G presidio presidio
 
-RUN useradd -m -u 1001 presidio
-
-# The Python interpreter plus the locked dependency tree, minus build tooling.
-COPY --from=builder /usr/local /usr/local
-# Model cache, placed directly in the runtime user's home. This replaces the
-# previous /root symlink dance — the builder controls where models land, so
-# they can be written to the right owner and path in one step.
-COPY --from=builder --chown=presidio:presidio /opt/hf-cache /home/presidio/.cache/huggingface
+# The dependency tree and the model cache. HF_HOME is an absolute path rather
+# than a home directory, so the runtime user needs no writable home.
+COPY --from=builder --chown=presidio:presidio /opt/venv /opt/venv
+COPY --from=builder --chown=presidio:presidio /opt/hf-cache /opt/hf-cache
 
 WORKDIR /app
 COPY --chown=presidio:presidio . /app/
@@ -90,6 +86,9 @@ COPY --chown=presidio:presidio . /app/
 USER 1001
 
 EXPOSE ${PORT}
+# The interpreter is already present, so the healthcheck uses it and curl —
+# along with its CVE surface — leaves the image entirely. urlopen raises on a
+# non-2xx response, which is the non-zero exit the healthcheck wants.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
+    CMD ["python", "-c", "import os,urllib.request;urllib.request.urlopen('http://localhost:'+os.environ['PORT']+'/health').read()"]
 CMD ["./entrypoint.sh"]
