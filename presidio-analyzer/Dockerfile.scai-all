@@ -1,26 +1,21 @@
-FROM python:3.12-slim
+# ---------------------------------------------------------------------------
+# builder — resolves the locked dependency graph and downloads models.
+# Nothing from this stage ships except what the runtime stage explicitly COPYs.
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim AS builder
 
 ARG NLP_CONF_FILE=presidio_analyzer/conf/default.yaml
-ARG ANALYZER_CONF_FILE=presidio_analyzer/conf/default_analyzer.yaml
-ARG RECOGNIZER_REGISTRY_CONF_FILE=presidio_analyzer/conf/default_recognizers.yaml
 ARG GLINER_MODELS="nvidia/gliner-pii"
-ENV PIP_NO_CACHE_DIR=1
-# Install the locked dependencies into the system environment (no venv).
-ENV UV_PROJECT_ENVIRONMENT=/usr/local
 
-ENV ANALYZER_CONF_FILE=${ANALYZER_CONF_FILE}
-ENV RECOGNIZER_REGISTRY_CONF_FILE=${RECOGNIZER_REGISTRY_CONF_FILE}
+ENV PIP_NO_CACHE_DIR=1
+# Install into the system environment (no venv) so the whole tree can be
+# copied forward as a unit.
+ENV UV_PROJECT_ENVIRONMENT=/usr/local
+# Deterministic model cache; relocated to the runtime user's home below.
+ENV HF_HOME=/opt/hf-cache
 ENV NLP_CONF_FILE=${NLP_CONF_FILE}
 
-ENV PORT=3000
-ENV WORKERS=1
-
 WORKDIR /app
-
-# Install essential build tools and curl for health checks
-RUN apt-get update \
-  && apt-get install curl --no-install-recommends -y \
-  && rm -rf /var/lib/apt/lists/*
 
 COPY ./pyproject.toml ./uv.lock /app/
 
@@ -36,19 +31,61 @@ RUN pip install uv==0.11.6 \
 COPY ${NLP_CONF_FILE} /app/${NLP_CONF_FILE}
 COPY install_*.py /app/
 
+# spacy_download() shells out to pip, so pip must still be present here.
 RUN python install_nlp_models.py --nlp_conf_file ${NLP_CONF_FILE}
-
-# Create a non-root user and set ownership
-RUN useradd -m -u 1001 presidio && chown -R presidio:presidio /app
-USER 1001
 RUN python install_gliner_models.py --models ${GLINER_MODELS}
 
-COPY . /app/
-USER 0
-RUN chown -R presidio:presidio /app
-RUN rm -rf /root/.cache/huggingface/hub && \
-	mkdir -p /root/.cache/huggingface && \
-	ln -s /home/presidio/.cache/huggingface/hub /root/.cache/huggingface/hub
+# Drop the build tooling before it can be copied forward. uv is a Rust binary
+# whose vendored crate graph is scanned as part of the image (astral-tokio-tar,
+# rustls-webpki, rkyv, quinn-proto and friends); pip carries its own
+# advisories. Neither is invoked at runtime — entrypoint.sh only execs gunicorn.
+RUN rm -rf /usr/local/bin/uv /usr/local/bin/uvx \
+           /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.* \
+           /usr/local/lib/python3.*/site-packages/pip \
+           /usr/local/lib/python3.*/site-packages/pip-*.dist-info \
+           /usr/local/lib/python3.*/site-packages/uv \
+           /usr/local/lib/python3.*/site-packages/uv-*.dist-info
+
+# ---------------------------------------------------------------------------
+# runtime
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim AS runtime
+
+ARG NLP_CONF_FILE=presidio_analyzer/conf/default.yaml
+ARG ANALYZER_CONF_FILE=presidio_analyzer/conf/default_analyzer.yaml
+ARG RECOGNIZER_REGISTRY_CONF_FILE=presidio_analyzer/conf/default_recognizers.yaml
+
+ENV ANALYZER_CONF_FILE=${ANALYZER_CONF_FILE}
+ENV RECOGNIZER_REGISTRY_CONF_FILE=${RECOGNIZER_REGISTRY_CONF_FILE}
+ENV NLP_CONF_FILE=${NLP_CONF_FILE}
+
+ENV PORT=3000
+ENV WORKERS=1
+ENV HF_HOME=/home/presidio/.cache/huggingface
+
+# curl is required by HEALTHCHECK below.
+#
+# pip is removed here as well as in the builder: COPY overlays rather than
+# replaces, so the base image's own copy would otherwise survive the
+# COPY --from=builder /usr/local below.
+RUN apt-get update \
+  && apt-get install curl --no-install-recommends -y \
+  && rm -rf /var/lib/apt/lists/* \
+  && rm -rf /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.* \
+            /usr/local/lib/python3.*/site-packages/pip \
+            /usr/local/lib/python3.*/site-packages/pip-*.dist-info
+
+RUN useradd -m -u 1001 presidio
+
+# The Python interpreter plus the locked dependency tree, minus build tooling.
+COPY --from=builder /usr/local /usr/local
+# Model cache, placed directly in the runtime user's home. This replaces the
+# previous /root symlink dance — the builder controls where models land, so
+# they can be written to the right owner and path in one step.
+COPY --from=builder --chown=presidio:presidio /opt/hf-cache /home/presidio/.cache/huggingface
+
+WORKDIR /app
+COPY --chown=presidio:presidio . /app/
 
 USER 1001
 
