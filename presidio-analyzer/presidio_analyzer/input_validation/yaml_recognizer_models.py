@@ -1,6 +1,6 @@
 """Pydantic models for YAML recognizer configurations."""
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Type, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -79,7 +79,11 @@ class BaseRecognizerConfig(BaseModel):
         default=None, description="Supported entity for this recognizer"
     )
     supported_entities: Optional[List[str]] = Field(
-        default=None, description="List of supported entities " "for this recognizer"
+        default=None, description="List of supported entities for this recognizer"
+    )
+    score_thresholds: Optional[Any] = Field(
+        default=None,
+        description="Default and entity-specific score thresholds",
     )
 
     @field_validator("supported_language")
@@ -136,6 +140,61 @@ class BaseRecognizerConfig(BaseModel):
         return self
 
 
+class TextChunkerConfig(BaseModel):
+    """Validated configuration for text chunker instantiation.
+
+    :param chunker_type: Type of chunker ("character" or "tokenizer").
+    :param chunk_size: Character chunk size (character chunker).
+    :param chunk_overlap: Character overlap (character chunker).
+    :param tokenizer: Tokenizer name or instance (tokenizer chunker).
+    :param max_tokens: Max tokens per chunk (tokenizer chunker).
+    :param overlap_tokens: Token overlap (tokenizer chunker).
+    """
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    chunker_type: Literal["character", "tokenizer"] = Field(
+        ..., description="Type of chunker"
+    )
+    chunk_size: Optional[int] = Field(None, description="Character chunk size")
+    chunk_overlap: Optional[int] = Field(None, description="Character overlap")
+    tokenizer: Optional[Any] = Field(None, description="Tokenizer name or instance")
+    max_tokens: Optional[int] = Field(None, description="Max tokens per chunk")
+    overlap_tokens: Optional[int] = Field(None, description="Token overlap")
+
+    @model_validator(mode="after")
+    def validate_params_match_chunker_type(self):
+        """Reject params that don't belong to the selected chunker_type.
+
+        Catches misconfigurations (e.g. ``max_tokens`` on a character chunker)
+        at validation time with a clear message, instead of letting them fail
+        later in TextChunkerProvider with a generic TypeError-wrapped error.
+        """
+        if self.chunker_type == "character":
+            invalid = [
+                name
+                for name in ("tokenizer", "max_tokens", "overlap_tokens")
+                if getattr(self, name) is not None
+            ]
+            if invalid:
+                raise ValueError(
+                    f"chunker_type='character' does not accept {invalid}; "
+                    "only 'chunk_size' and 'chunk_overlap' are allowed."
+                )
+        else:  # tokenizer
+            invalid = [
+                name
+                for name in ("chunk_size", "chunk_overlap")
+                if getattr(self, name) is not None
+            ]
+            if invalid:
+                raise ValueError(
+                    f"chunker_type='tokenizer' does not accept {invalid}; "
+                    "only 'tokenizer', 'max_tokens' and 'overlap_tokens' are allowed."
+                )
+        return self
+
+
 class PredefinedRecognizerConfig(BaseRecognizerConfig):
     """Configuration for predefined recognizers."""
 
@@ -154,12 +213,147 @@ class PredefinedRecognizerConfig(BaseRecognizerConfig):
         return self
 
 
+class HuggingFaceRecognizerConfig(PredefinedRecognizerConfig):
+    """Configuration specifically for HuggingFace NER models."""
+
+    model_config = ConfigDict(extra="allow")
+
+    model_name: Optional[str] = Field(None, description="HuggingFace model name")
+    tokenizer_name: Optional[str] = Field(
+        None, description="HuggingFace tokenizer name"
+    )
+    label_mapping: Optional[Dict[str, str]] = Field(None, description="Label mapping")
+    threshold: Optional[float] = Field(None, description="Confidence threshold")
+    aggregation_strategy: Optional[str] = Field(
+        None, description="Aggregation strategy"
+    )
+    chunk_overlap: Optional[int] = Field(None, description="Chunk overlap")
+    chunk_size: Optional[int] = Field(None, description="Chunk size")
+    device: Optional[Union[str, int]] = Field(None, description="Device (cpu/gpu)")
+    label_prefixes: Optional[List[str]] = Field(
+        default=None, description="Prefixes to strip from labels (e.g. B-, I-)"
+    )
+    text_chunker: Optional[Union[TextChunkerConfig, Dict[str, Any]]] = Field(
+        None, description="Text chunker configuration"
+    )
+
+    @field_validator("text_chunker", mode="before")
+    @classmethod
+    def validate_text_chunker(cls, v):
+        """Validate text_chunker dict against TextChunkerConfig."""
+        if isinstance(v, dict):
+            return TextChunkerConfig(**v)
+        return v
+
+    def model_dump(self, *args, **kwargs) -> Dict[str, Any]:
+        """Serialize the config without None values by default.
+
+        HuggingFace recognizer kwargs are passed directly to the recognizer constructor.
+        Excluding None values preserves constructor defaults for omitted YAML fields
+        instead of overriding them with explicit None.
+        """
+        kwargs.setdefault("exclude_none", True)
+        result = super().model_dump(*args, **kwargs)
+        # Convert TextChunkerConfig back to plain dict for the loader
+        if "text_chunker" in result and isinstance(
+            self.text_chunker, TextChunkerConfig
+        ):
+            result["text_chunker"] = self.text_chunker.model_dump(exclude_none=True)
+        return result
+
+
+class GLiNERRecognizerConfig(PredefinedRecognizerConfig):
+    """Configuration specifically for GLiNER models."""
+
+    model_config = ConfigDict(extra="allow")
+
+    model_name: Optional[str] = Field(None, description="GLiNER model name")
+    flat_ner: Optional[bool] = Field(None, description="Use flat NER")
+    multi_label: Optional[bool] = Field(
+        None, description="Use multi-label classification"
+    )
+    threshold: Optional[float] = Field(None, description="Confidence threshold")
+    map_location: Optional[str] = Field(None, description="Device (cpu/gpu/etc.)")
+    load_onnx_model: Optional[bool] = Field(None, description="Load ONNX model")
+    onnx_model_file: Optional[str] = Field(None, description="ONNX model file name")
+    entity_mapping: Optional[Dict[str, str]] = Field(None, description="Entity mapping")
+    text_chunker: Optional[Union[TextChunkerConfig, Dict[str, Any]]] = Field(
+        None, description="Text chunker configuration"
+    )
+
+    @field_validator("text_chunker", mode="before")
+    @classmethod
+    def validate_text_chunker(cls, v):
+        """Validate text_chunker dict against TextChunkerConfig."""
+        if isinstance(v, dict):
+            return TextChunkerConfig(**v)
+        return v
+
+    @model_validator(mode="after")
+    def validate_entity_mapping_and_supported_entities(self):
+        """Validate that entity_mapping and supported_entities are not both set."""
+        if self.entity_mapping is not None and self.supported_entities is not None:
+            raise ValueError(
+                "GLiNER recognizer configuration cannot define both "
+                "'entity_mapping' and 'supported_entities'; these fields are "
+                "mutually exclusive."
+            )
+        return self
+
+    def model_dump(self, *args, **kwargs) -> Dict[str, Any]:
+        """Serialize the config without None values by default.
+
+        GLiNER recognizer kwargs are passed directly to the recognizer constructor.
+        Excluding None values preserves constructor defaults for omitted YAML fields
+        instead of overriding them with explicit None.
+        """
+        kwargs.setdefault("exclude_none", True)
+        result = super().model_dump(*args, **kwargs)
+        if "text_chunker" in result and isinstance(
+            self.text_chunker, TextChunkerConfig
+        ):
+            result["text_chunker"] = self.text_chunker.model_dump(exclude_none=True)
+        return result
+
+
+class LangExtractRecognizerConfig(PredefinedRecognizerConfig):
+    """Configuration for language model (LangExtract) recognizers.
+
+    Covers ``BasicLangExtractRecognizer`` and ``AzureOpenAILangExtractRecognizer``.
+    ``extra="allow"`` lets recognizer-specific kwargs (most importantly
+    ``config_path``, pointing at the langextract model YAML) survive validation
+    and reach the recognizer constructor. Without this, the strict
+    ``PredefinedRecognizerConfig`` schema drops ``config_path`` and the recognizer
+    silently falls back to its bundled default model configuration.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    config_path: Optional[str] = Field(
+        None, description="Path to the langextract model configuration YAML"
+    )
+
+    def model_dump(self, *args, **kwargs) -> Dict[str, Any]:
+        """Serialize the config without None values by default.
+
+        LangExtract recognizer kwargs are passed directly to the recognizer
+        constructor. Excluding None values preserves constructor defaults for
+        omitted YAML fields instead of overriding them with explicit None.
+        """
+        kwargs.setdefault("exclude_none", True)
+        return super().model_dump(*args, **kwargs)
+
+
 class CustomRecognizerConfig(BaseRecognizerConfig):
     """Configuration for custom pattern-based recognizers."""
 
     type: str = Field(default="custom", description="Type of recognizer")
     supported_entity: str = Field(
         ..., description="Entity type this recognizer detects"
+    )
+    country_code: Optional[str] = Field(
+        default=None,
+        description=("Optional ISO 3166-1 alpha-2 country tag for country filtering"),
     )
     patterns: Optional[List[Dict[str, Any]]] = Field(
         default=None, description="List of patterns"
@@ -213,6 +407,22 @@ class CustomRecognizerConfig(BaseRecognizerConfig):
                     pass
         return data
 
+    @field_validator("country_code")
+    @classmethod
+    def validate_country_code(cls, value: Optional[str]) -> Optional[str]:
+        """Validate and normalize the optional custom recognizer country tag."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(
+                "country_code must be a single non-empty string, "
+                f"got {type(value).__name__}: {value!r}"
+            )
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("country_code must be a non-empty string")
+        return normalized
+
     @field_validator("patterns")
     @classmethod
     def validate_patterns(cls, patterns: Optional[List[Dict]]) -> Optional[List[Dict]]:
@@ -243,8 +453,7 @@ class CustomRecognizerConfig(BaseRecognizerConfig):
         """Ensure custom recognizer has at least patterns or deny_list."""
         if not self.patterns and not self.deny_list:
             raise ValueError(
-                "Custom recognizer must have at least one "
-                "of 'patterns' or 'deny_list'"
+                "Custom recognizer must have at least one of 'patterns' or 'deny_list'"
             )
         return self
 
@@ -257,7 +466,13 @@ class RecognizerRegistryConfig(BaseModel):
     )
     global_regex_flags: int = Field(default=26, description="Global regex flags")
     recognizers: List[
-        Union[PredefinedRecognizerConfig, CustomRecognizerConfig, str]
+        Union[
+            HuggingFaceRecognizerConfig,
+            GLiNERRecognizerConfig,
+            PredefinedRecognizerConfig,
+            CustomRecognizerConfig,
+            str,
+        ]
     ] = Field(default_factory=list, description="List of recognizer configurations")
 
     model_config = ConfigDict(extra="forbid")
@@ -339,6 +554,7 @@ class RecognizerRegistryConfig(BaseModel):
                 continue
 
             if isinstance(recognizer, dict):
+                recognizer = recognizer.copy()
                 recognizer_type = recognizer.get("type")
 
                 # Validate conflicting custom-only fields if explicitly predefined
@@ -363,7 +579,18 @@ class RecognizerRegistryConfig(BaseModel):
                     recognizer["type"] = recognizer_type
 
                 if recognizer_type == "predefined":
-                    parsed_recognizers.append(PredefinedRecognizerConfig(**recognizer))
+                    # Determine config model based on recognizer class_name or name.
+                    recognizer_class_name = recognizer.get("class_name")
+                    recognizer_name = recognizer.get("name")
+                    # Prioritize class_name for lookup
+                    # (e.g., custom instance of HuggingFaceNerRecognizer)
+                    config_model_key = recognizer_class_name or recognizer_name
+
+                    config_model = CONFIG_MODEL_MAP.get(
+                        config_model_key, PredefinedRecognizerConfig
+                    )
+
+                    parsed_recognizers.append(config_model(**recognizer))
                 elif recognizer_type == "custom":
                     parsed_recognizers.append(CustomRecognizerConfig(**recognizer))
                 else:
@@ -420,3 +647,13 @@ class RecognizerRegistryConfig(BaseModel):
                     "or specify languages for each custom recognizer."
                 )
         return self
+
+
+# Map specific recognizer classes to their dedicated config models
+# This allows for modular expansion without polluting the base config
+CONFIG_MODEL_MAP: Dict[str, Type[BaseModel]] = {
+    "HuggingFaceNerRecognizer": HuggingFaceRecognizerConfig,
+    "GLiNERRecognizer": GLiNERRecognizerConfig,
+    "BasicLangExtractRecognizer": LangExtractRecognizerConfig,
+    "AzureOpenAILangExtractRecognizer": LangExtractRecognizerConfig,
+}
