@@ -25,7 +25,7 @@ ENV PATH="/opt/venv/bin:${PATH}"
 
 # Poetry lives in its own venv so it never becomes part of the tree that ships.
 RUN python3.12 -m venv /opt/poetry && \
-    /opt/poetry/bin/pip install --no-cache-dir poetry==2.4.1 && \
+    /opt/poetry/bin/pip install --no-cache-dir poetry==2.1.2 && \
     python3.12 -m venv /opt/venv
 
 WORKDIR /app
