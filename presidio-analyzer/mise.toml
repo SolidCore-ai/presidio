@@ -1,0 +1,41 @@
+# Tool versions for presidio-analyzer.
+#
+# SETUP — install python BEFORE poetry:
+#
+#   mise install python@3.12.14
+#   mise install poetry@2.1.2
+#
+# Run them as two commands, in that order — a bare `mise install` resolves the
+# whole [tools] table without guaranteeing python lands before poetry.
+# Order matters. The vfox-poetry backend builds poetry's own virtualenv from
+# whichever `python3` is on PATH at install time. Install poetry first and it
+# silently binds to macOS's system interpreter (3.9.6, EOL since Oct 2025,
+# LibreSSL 2.8.3) and stays there across reinstalls, because mise keeps the
+# cached tree. If you have already hit that, clear the trees first:
+#
+#   rm -rf ~/.local/share/mise/installs/poetry
+#   mise install python@3.12.14 && mise install poetry@2.1.2
+#
+# Verify with `poetry about`: a urllib3 NotOpenSSLWarning means poetry is still
+# on the system python and the venv needs rebuilding.
+
+[tools]
+# Pinned deliberately — this is a correctness constraint, not just
+# reproducibility. Poetry 2.4.1 re-resolves torch away from the `pytorch-cpu`
+# source declared in pyproject.toml and pulls in 18 nvidia-* packages plus
+# triton, along with a duplicate torch entry: gigabytes of CUDA libraries in an
+# image that only ever runs CPU inference. Poetry 2.1.2 running the identical
+# `poetry update --lock` command adds none of it.
+#
+# Keep this in lockstep with the `poetry==` pin in Dockerfile.scai-all so the
+# lock is resolved and installed by the same version. Before bumping either,
+# re-run the update and confirm the CUDA tree has not returned:
+#
+#   grep -c '^name = "nvidia' poetry.lock   # must be 0
+#   grep -c '^name = "torch"' poetry.lock   # must be 1
+poetry = "2.1.2"
+
+# Interpreter poetry itself runs on. The project resolves against
+# requires-python = ">=3.10,<3.14", and the image builds on python-3.12.
+# Pinned exact, matching the convention in the monorepo's mise.toml.
+python = "3.12.14"
