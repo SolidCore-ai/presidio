@@ -70,13 +70,14 @@ RUN addgroup -S presidio && adduser -S -D -H -u 1001 -G presidio presidio
 COPY --from=builder --chown=presidio:presidio /opt/venv /opt/venv
 COPY --from=builder --chown=presidio:presidio /opt/hf-cache /opt/hf-cache
 
+WORKDIR /app
+COPY --chown=presidio:presidio . /app/
 # Build-time inputs, not runtime content. The blanket COPY above pulls them in;
 # shipping poetry.lock makes scanners report its dev-group entries — 17 packages
 # that `poetry install --only=main` never installs — as present in the image.
-RUN rm -f /app/poetry.lock /app/pyproject.toml
-
-WORKDIR /app
-COPY --chown=presidio:presidio . /app/
+RUN rm -f /app/poetry.lock /app/pyproject.toml && \
+    test ! -e /app/poetry.lock && \
+    test ! -e /app/pyproject.toml
 
 USER 1001
 
