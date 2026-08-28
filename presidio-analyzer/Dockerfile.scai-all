@@ -1,54 +1,84 @@
-FROM python:3.12-slim
+# Deliberately unpinned: Wolfi rebuilds continuously and the point of moving
+# here is to inherit those rebuilds. Digest pinning is tracked separately.
+FROM cgr.dev/chainguard/wolfi-base:latest AS base
+
+# python-3.12 satisfies the lock's requires-python (>=3.10,<3.14). libstdc++ is
+# needed by the torch and onnxruntime manylinux wheels.
+RUN apk add --no-cache python-3.12 libstdc++
+
+# builder — resolves the locked dependency graph and downloads models.
+# Nothing from this stage ships except what the runtime stage explicitly COPYs.
+FROM base AS builder
+
+ARG NLP_CONF_FILE=presidio_analyzer/conf/default.yaml
+ARG GLINER_MODELS="nvidia/gliner-pii"
+
+ENV HF_HOME=/opt/hf-cache
+ENV NLP_CONF_FILE=${NLP_CONF_FILE}
+ENV PIP_NO_CACHE_DIR=1
+# virtualenvs.create=false makes poetry install into the environment named by
+# VIRTUAL_ENV instead of one it manages, so the tree lands at a fixed path the
+# runtime stage can COPY.
+ENV POETRY_VIRTUALENVS_CREATE=false
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+# Poetry lives in its own venv so it never becomes part of the tree that ships.
+RUN python3.12 -m venv /opt/poetry && \
+    /opt/poetry/bin/pip install --no-cache-dir poetry==2.4.1 && \
+    python3.12 -m venv /opt/venv
+
+WORKDIR /app
+
+COPY ./pyproject.toml ./poetry.lock /app/
+
+# Install exactly the locked graph: main only, the three extras this image
+# serves, project itself not installed (it is run from the copied source).
+# Splitting this from the source COPY keeps the layer cached until the
+# manifests change.
+RUN /opt/poetry/bin/poetry install --no-root --only=main \
+        -E server -E gliner -E langextract
+
+COPY ${NLP_CONF_FILE} /app/${NLP_CONF_FILE}
+COPY install_*.py /app/
+
+# spacy_download() shells out to `sys.executable -m pip`, so pip has to survive
+# until the models are fetched. Dropping it in the same layer keeps it, and its
+# CVE surface, out of the tree the runtime stage copies.
+RUN python install_nlp_models.py --conf_file ${NLP_CONF_FILE} && \
+    python install_gliner_models.py --models ${GLINER_MODELS} && \
+    pip uninstall -y pip setuptools wheel
+
+FROM base AS runtime
 
 ARG NLP_CONF_FILE=presidio_analyzer/conf/default.yaml
 ARG ANALYZER_CONF_FILE=presidio_analyzer/conf/default_analyzer.yaml
 ARG RECOGNIZER_REGISTRY_CONF_FILE=presidio_analyzer/conf/default_recognizers.yaml
-ARG GLINER_MODELS="nvidia/gliner-pii"
-ENV PIP_NO_CACHE_DIR=1
-ENV POETRY_VIRTUALENVS_CREATE=false
 
+ENV NLP_CONF_FILE=${NLP_CONF_FILE}
 ENV ANALYZER_CONF_FILE=${ANALYZER_CONF_FILE}
 ENV RECOGNIZER_REGISTRY_CONF_FILE=${RECOGNIZER_REGISTRY_CONF_FILE}
-ENV NLP_CONF_FILE=${NLP_CONF_FILE}
-
+ENV HF_HOME=/opt/hf-cache
+ENV PATH="/opt/venv/bin:${PATH}"
 ENV PORT=3000
 ENV WORKERS=1
 
-WORKDIR /app
+RUN addgroup -S presidio && adduser -S -D -H -u 1001 -G presidio presidio
 
-# Install essential build tools and curl for health checks
-RUN apt-get update \
-  && apt-get install curl --no-install-recommends -y \
-  && rm -rf /var/lib/apt/lists/*
-
-COPY ./pyproject.toml /app/
-COPY ./poetry.lock /app/
-
-RUN pip install poetry \
-    && poetry install --no-root --only=main -E server -E gliner -E langextract \
-    && rm -rf $(poetry config cache-dir)
-    
-COPY ${NLP_CONF_FILE} /app/${NLP_CONF_FILE}
-COPY install_*.py /app/
+# The dependency tree and the model cache. HF_HOME is an absolute path rather
+# than a home directory, so the runtime user needs no writable home.
+COPY --from=builder --chown=presidio:presidio /opt/venv /opt/venv
+COPY --from=builder --chown=presidio:presidio /opt/hf-cache /opt/hf-cache
 
 WORKDIR /app
-RUN poetry run python install_nlp_models.py --conf_file ${NLP_CONF_FILE}
-
-# Create a non-root user and set ownership
-RUN useradd -m -u 1001 presidio && chown -R presidio:presidio /app
-USER 1001
-RUN poetry run python install_gliner_models.py --models ${GLINER_MODELS}
-
-COPY . /app/
-USER 0
-RUN chown -R presidio:presidio /app
-RUN rm -rf /root/.cache/huggingface/hub && \
-	mkdir -p /root/.cache/huggingface && \
-	ln -s /home/presidio/.cache/huggingface/hub /root/.cache/huggingface/hub
+COPY --chown=presidio:presidio . /app/
 
 USER 1001
 
 EXPOSE ${PORT}
+# The interpreter is already present, so the healthcheck uses it and curl —
+# along with its CVE surface — leaves the image entirely. urlopen raises on a
+# non-2xx response, which is the non-zero exit the healthcheck wants.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
+    CMD ["python", "-c", "import os,urllib.request;urllib.request.urlopen('http://localhost:'+os.environ['PORT']+'/health').read()"]
 CMD ["./entrypoint.sh"]
