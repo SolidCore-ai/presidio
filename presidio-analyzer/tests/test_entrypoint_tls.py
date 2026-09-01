@@ -1,5 +1,3 @@
-# © SolidCore.ai, Inc. 2026 All rights reserved.
-
 """TLS flag behavior of entrypoint.sh under the TLS_*_FILE variables."""
 
 import os
