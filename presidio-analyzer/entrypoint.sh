@@ -1,5 +1,5 @@
 #!/bin/sh
-# When the RD-3617 TLS_*_FILE contract is set, serve mutual TLS: present the
+# When the TLS_*_FILE variables are set, serve mutual TLS: present the
 # leaf, verify clients against the CA (--cert-reqs 2 = ssl.CERT_REQUIRED,
 # integer per gunicorn). Unset means plaintext, exactly as before. The vars
 # carry file paths, never certificate material.
