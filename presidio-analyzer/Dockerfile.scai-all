@@ -86,5 +86,5 @@ EXPOSE ${PORT}
 # along with its CVE surface — leaves the image entirely. urlopen raises on a
 # non-2xx response, which is the non-zero exit the healthcheck wants.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
-    CMD ["python", "-c", "import os,urllib.request;urllib.request.urlopen('http://localhost:'+os.environ['PORT']+'/health').read()"]
+    CMD ["python", "-c", "import os,ssl,urllib.request;p=os.environ['PORT'];c=os.environ.get('TLS_CERT_FILE');x=ssl.create_default_context(cafile=os.environ['TLS_CA_FILE']) if c else None;x and x.load_cert_chain(c,os.environ['TLS_KEY_FILE']);urllib.request.urlopen(('https' if c else 'http')+'://localhost:'+p+'/health',context=x).read()"]
 CMD ["./entrypoint.sh"]

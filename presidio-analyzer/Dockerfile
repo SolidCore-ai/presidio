@@ -44,5 +44,5 @@ USER 1001
 
 EXPOSE ${PORT}
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
+    CMD curl -f ${TLS_CERT_FILE:+--cert "$TLS_CERT_FILE" --key "$TLS_KEY_FILE" --cacert "$TLS_CA_FILE"} http${TLS_CERT_FILE:+s}://localhost:${PORT}/health || exit 1
 CMD ["./entrypoint.sh"]
