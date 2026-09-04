@@ -1,3 +1,6 @@
+# syntax=docker.io/docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
+# syntax must be the first line; COPY --exclude needs frontend >= 1.7
+
 # Deliberately unpinned: Wolfi rebuilds continuously and the point of moving
 # here is to inherit those rebuilds. Digest pinning is tracked separately.
 FROM cgr.dev/chainguard/wolfi-base:latest AS base
@@ -71,13 +74,17 @@ COPY --from=builder --chown=presidio:presidio /opt/venv /opt/venv
 COPY --from=builder --chown=presidio:presidio /opt/hf-cache /opt/hf-cache
 
 WORKDIR /app
-COPY --chown=presidio:presidio . /app/
-# Build-time inputs, not runtime content. The blanket COPY above pulls them in;
-# shipping poetry.lock makes scanners report its dev-group entries — 17 packages
-# that `poetry install --only=main` never installs — as present in the image.
-RUN rm -f /app/poetry.lock /app/pyproject.toml && \
-    test ! -e /app/poetry.lock && \
-    test ! -e /app/pyproject.toml
+# Build inputs the runtime never reads: the builder consumed poetry.lock and
+# pyproject.toml to produce /opt/venv; mise.toml pins developer tool versions.
+# Excluded here rather than removed afterwards — a later rm only writes
+# whiteouts, leaving the bytes readable in this COPY's layer.
+COPY --exclude=poetry.lock --exclude=pyproject.toml --exclude=mise.toml \
+    --chown=presidio:presidio . /app/
+# Fails the build if a build input lands in this stage. Keep this the last
+# filesystem instruction so it runs after everything that shapes the image.
+RUN test ! -e /app/poetry.lock && \
+    test ! -e /app/pyproject.toml && \
+    test ! -e /app/mise.toml
 
 USER 1001
 
