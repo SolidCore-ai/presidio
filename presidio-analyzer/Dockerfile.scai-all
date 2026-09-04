@@ -72,12 +72,20 @@ COPY --from=builder --chown=presidio:presidio /opt/hf-cache /opt/hf-cache
 
 WORKDIR /app
 COPY --chown=presidio:presidio . /app/
-# Build-time inputs, not runtime content. The blanket COPY above pulls them in;
-# shipping poetry.lock makes scanners report its dev-group entries — 17 packages
-# that `poetry install --only=main` never installs — as present in the image.
-RUN rm -f /app/poetry.lock /app/pyproject.toml && \
+# The blanket COPY above pulls in build inputs the runtime never reads:
+# poetry.lock and pyproject.toml are consumed by the builder stage to produce
+# /opt/venv, and mise.toml pins developer tool versions. They are outside this
+# image's runtime scope — vulnerabilities attributed to them are not reachable
+# here — and a shipped poetry.lock would claim dev-group packages that were
+# never installed, when /opt/venv's dist-info metadata already records exactly
+# what ships. Keep this RUN the last filesystem instruction in the stage so it
+# runs after everything that shapes the image; ordered earlier it passes
+# vacuously (rm -f exits 0 on missing paths and the tests see files not yet
+# copied in).
+RUN rm -f /app/poetry.lock /app/pyproject.toml /app/mise.toml && \
     test ! -e /app/poetry.lock && \
-    test ! -e /app/pyproject.toml
+    test ! -e /app/pyproject.toml && \
+    test ! -e /app/mise.toml
 
 USER 1001
 
