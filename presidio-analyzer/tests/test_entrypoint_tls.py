@@ -87,6 +87,42 @@ def test_threads_and_keep_alive_are_operator_tunable(tmp_path):
     assert "--keep-alive 120" in args
 
 
+def test_a_partial_tls_env_set_stops_startup(tmp_path):
+    """Setting any TLS_*_FILE variable requires all three.
+
+    The quadrant that matters: key and CA without the cert previously fell
+    through to the plaintext branch and served unencrypted while the
+    operator believed TLS was configured.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "gunicorn"
+    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    base_env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "WORKERS": "1",
+        "PORT": "3000",
+    }
+    partial_sets = [
+        {"TLS_CERT_FILE": "/tls/tls.crt"},
+        {"TLS_KEY_FILE": "/tls/tls.key", "TLS_CA_FILE": "/tls/ca.crt"},
+        {"TLS_CERT_FILE": "/tls/tls.crt", "TLS_KEY_FILE": "/tls/tls.key"},
+    ]
+    for tls_env in partial_sets:
+        result = subprocess.run(
+            [str(ENTRYPOINT)],
+            env={**base_env, **tls_env},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0, tls_env
+        assert "all-or-none" in result.stderr
+        for var in {"TLS_CERT_FILE", "TLS_KEY_FILE", "TLS_CA_FILE"} - set(tls_env):
+            assert var in result.stderr
+
+
 def test_served_connections_are_reused_across_requests(tmp_path):
     """Two requests on one socket reach a real gunicorn booted by entrypoint.sh.
 
@@ -137,15 +173,25 @@ def test_served_connections_are_reused_across_requests(tmp_path):
             pytest.fail(f"gunicorn never started listening:\n{log_path.read_text()}")
 
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-        # http.client reconnects transparently after a server-side close, so
-        # inspect the header the server actually sent rather than trusting
-        # that a second request "worked".
-        for _ in range(2):
-            conn.request("GET", "/")
-            response = conn.getresponse()
-            assert response.status == 200
-            assert response.getheader("Connection") != "close"
-            response.read()
+        # Two layers of evidence, because http.client reconnects transparently
+        # after a server-side close: the Connection header states the server's
+        # contract, and the socket identity proves actual reuse — a reconnect
+        # creates a new socket object with a new ephemeral local port.
+        conn.request("GET", "/")
+        response = conn.getresponse()
+        assert response.status == 200
+        assert response.getheader("Connection") != "close"
+        response.read()
+        first_socket = conn.sock
+        first_local_addr = conn.sock.getsockname()
+
+        conn.request("GET", "/")
+        response = conn.getresponse()
+        assert response.status == 200
+        assert response.getheader("Connection") != "close"
+        response.read()
+        assert conn.sock is first_socket
+        assert conn.sock.getsockname() == first_local_addr
         conn.close()
     finally:
         server.terminate()

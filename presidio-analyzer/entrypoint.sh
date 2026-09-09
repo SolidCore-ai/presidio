@@ -3,6 +3,21 @@
 # leaf, verify clients against the CA (--cert-reqs 2 = ssl.CERT_REQUIRED,
 # integer per gunicorn). Unset means plaintext, exactly as before. The vars
 # carry file paths, never certificate material.
+#
+# The three variables are all-or-none: setting any one requires all three,
+# and a partial set stops startup naming what is missing. In particular,
+# TLS_KEY_FILE and TLS_CA_FILE without TLS_CERT_FILE would otherwise serve
+# plaintext while the operator believes TLS is configured.
+if [ -n "${TLS_CERT_FILE}${TLS_KEY_FILE}${TLS_CA_FILE}" ]; then
+  missing=""
+  [ -n "$TLS_CERT_FILE" ] || missing="$missing TLS_CERT_FILE"
+  [ -n "$TLS_KEY_FILE" ] || missing="$missing TLS_KEY_FILE"
+  [ -n "$TLS_CA_FILE" ] || missing="$missing TLS_CA_FILE"
+  if [ -n "$missing" ]; then
+    echo "entrypoint.sh: TLS_CERT_FILE, TLS_KEY_FILE, and TLS_CA_FILE are all-or-none; missing:$missing" >&2
+    exit 1
+  fi
+fi
 if [ -n "$TLS_CERT_FILE" ]; then
   set -- --certfile "$TLS_CERT_FILE" --keyfile "$TLS_KEY_FILE" --ca-certs "$TLS_CA_FILE" --cert-reqs 2
 else
