@@ -13,7 +13,7 @@ import pytest
 ENTRYPOINT = Path(__file__).resolve().parents[1] / "entrypoint.sh"
 
 
-def _gunicorn_args(tls_env: dict, tmp_path: Path) -> str:
+def _gunicorn_args(tls_env: dict, tmp_path: Path, extra_env: dict | None = None) -> str:
     """Run entrypoint.sh with a stub gunicorn; return the args it received."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -26,6 +26,7 @@ def _gunicorn_args(tls_env: dict, tmp_path: Path) -> str:
         "WORKERS": "1",
         "PORT": "3000",
         **tls_env,
+        **(extra_env or {}),
     }
     subprocess.run([str(ENTRYPOINT)], env=env, check=True, timeout=30)
     return args_file.read_text().strip()
@@ -81,21 +82,7 @@ def test_worker_class_supports_keep_alive_on_both_paths(tmp_path):
 
 def test_threads_and_keep_alive_are_operator_tunable(tmp_path):
     """THREADS and KEEP_ALIVE override the defaults, mirroring WORKERS."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(exist_ok=True)
-    args_file = tmp_path / "gunicorn_args"
-    stub = bin_dir / "gunicorn"
-    stub.write_text(f'#!/bin/sh\necho "$@" > "{args_file}"\n')
-    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
-    env = {
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
-        "WORKERS": "2",
-        "PORT": "3000",
-        "THREADS": "4",
-        "KEEP_ALIVE": "120",
-    }
-    subprocess.run([str(ENTRYPOINT)], env=env, check=True, timeout=30)
-    args = args_file.read_text().strip()
+    args = _gunicorn_args({}, tmp_path, extra_env={"THREADS": "4", "KEEP_ALIVE": "120"})
     assert "--threads 4" in args
     assert "--keep-alive 120" in args
 
@@ -127,23 +114,27 @@ def test_served_connections_are_reused_across_requests(tmp_path):
         # the image default /dev/shm only exists on Linux
         "WORKER_TMP_DIR": str(tmp_path),
     }
-    server = subprocess.Popen(
-        [str(ENTRYPOINT)],
-        cwd=tmp_path,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    log_path = tmp_path / "gunicorn.log"
+    with log_path.open("wb") as log:
+        server = subprocess.Popen(
+            [str(ENTRYPOINT)],
+            cwd=tmp_path,
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
     try:
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
+            if server.poll() is not None:
+                pytest.fail(f"gunicorn exited during boot:\n{log_path.read_text()}")
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=1):
                     break
             except OSError:
                 time.sleep(0.2)
         else:
-            pytest.fail("gunicorn never started listening")
+            pytest.fail(f"gunicorn never started listening:\n{log_path.read_text()}")
 
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
         # http.client reconnects transparently after a server-side close, so
@@ -158,4 +149,8 @@ def test_served_connections_are_reused_across_requests(tmp_path):
         conn.close()
     finally:
         server.terminate()
-        server.wait(timeout=10)
+        try:
+            server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=10)
