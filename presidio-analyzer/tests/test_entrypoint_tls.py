@@ -1,9 +1,14 @@
 """TLS flag behavior of entrypoint.sh under the TLS_*_FILE variables."""
 
+import http.client
 import os
+import socket
 import stat
 import subprocess
+import time
 from pathlib import Path
+
+import pytest
 
 ENTRYPOINT = Path(__file__).resolve().parents[1] / "entrypoint.sh"
 
@@ -46,4 +51,111 @@ def test_gunicorn_requires_client_certs_when_tls_env_is_set(tmp_path):
 def test_gunicorn_args_are_unchanged_without_tls_env(tmp_path):
     """Without TLS_*_FILE, the gunicorn invocation matches today's exactly."""
     args = _gunicorn_args({}, tmp_path)
-    assert args == "-w 1 --worker-tmp-dir /dev/shm -b 0.0.0.0:3000 app:create_app()"
+    assert args == (
+        "-w 1 --worker-class gthread --threads 1 --keep-alive 75"
+        " --worker-tmp-dir /dev/shm -b 0.0.0.0:3000 app:create_app()"
+    )
+
+
+def test_worker_class_supports_keep_alive_on_both_paths(tmp_path):
+    """Both TLS and plaintext invocations run a keep-alive-capable worker.
+
+    The default sync worker closes every connection after its response, which
+    silently costs clients a full TLS handshake per request no matter how they
+    pool connections. The worker class is therefore load-bearing for the
+    service's hottest path, not a tuning preference.
+    """
+    for tls_env in (
+        {},
+        {
+            "TLS_CERT_FILE": "/tls/tls.crt",
+            "TLS_KEY_FILE": "/tls/tls.key",
+            "TLS_CA_FILE": "/tls/ca.crt",
+        },
+    ):
+        args = _gunicorn_args(tls_env, tmp_path)
+        assert "--worker-class gthread" in args
+        assert "--threads 1" in args
+        assert "--keep-alive 75" in args
+
+
+def test_threads_and_keep_alive_are_operator_tunable(tmp_path):
+    """THREADS and KEEP_ALIVE override the defaults, mirroring WORKERS."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    args_file = tmp_path / "gunicorn_args"
+    stub = bin_dir / "gunicorn"
+    stub.write_text(f'#!/bin/sh\necho "$@" > "{args_file}"\n')
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "WORKERS": "2",
+        "PORT": "3000",
+        "THREADS": "4",
+        "KEEP_ALIVE": "120",
+    }
+    subprocess.run([str(ENTRYPOINT)], env=env, check=True, timeout=30)
+    args = args_file.read_text().strip()
+    assert "--threads 4" in args
+    assert "--keep-alive 120" in args
+
+
+def test_served_connections_are_reused_across_requests(tmp_path):
+    """Two requests on one socket reach a real gunicorn booted by entrypoint.sh.
+
+    Runs the actual entrypoint against a trivial WSGI app (gunicorn resolves
+    ``app:create_app()`` from the working directory), then asserts the server
+    holds the connection open between requests instead of answering
+    ``Connection: close`` — the regression this file exists to prevent.
+    """
+    pytest.importorskip("gunicorn")
+    (tmp_path / "app.py").write_text(
+        "def create_app():\n"
+        "    def app(environ, start_response):\n"
+        "        start_response('200 OK', [('Content-Type', 'text/plain')])\n"
+        "        return [b'ok']\n"
+        "    return app\n"
+    )
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    env = {
+        "PATH": os.environ["PATH"],
+        "WORKERS": "1",
+        "PORT": str(port),
+        # the image default /dev/shm only exists on Linux
+        "WORKER_TMP_DIR": str(tmp_path),
+    }
+    server = subprocess.Popen(
+        [str(ENTRYPOINT)],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=1):
+                    break
+            except OSError:
+                time.sleep(0.2)
+        else:
+            pytest.fail("gunicorn never started listening")
+
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        # http.client reconnects transparently after a server-side close, so
+        # inspect the header the server actually sent rather than trusting
+        # that a second request "worked".
+        for _ in range(2):
+            conn.request("GET", "/")
+            response = conn.getresponse()
+            assert response.status == 200
+            assert response.getheader("Connection") != "close"
+            response.read()
+        conn.close()
+    finally:
+        server.terminate()
+        server.wait(timeout=10)
