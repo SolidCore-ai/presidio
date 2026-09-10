@@ -1,6 +1,7 @@
 """TLS flag behavior of entrypoint.sh under the TLS_*_FILE variables."""
 
 import http.client
+import itertools
 import os
 import socket
 import stat
@@ -63,8 +64,7 @@ def test_worker_class_supports_keep_alive_on_both_paths(tmp_path):
 
     The default sync worker closes every connection after its response, which
     silently costs clients a full TLS handshake per request no matter how they
-    pool connections. The worker class is therefore load-bearing for the
-    service's hottest path, not a tuning preference.
+    pool connections.
     """
     for tls_env in (
         {},
@@ -88,12 +88,7 @@ def test_threads_and_keep_alive_are_operator_tunable(tmp_path):
 
 
 def test_a_partial_tls_env_set_stops_startup(tmp_path):
-    """Setting any TLS_*_FILE variable requires all three.
-
-    The quadrant that matters: key and CA without the cert previously fell
-    through to the plaintext branch and served unencrypted while the
-    operator believed TLS was configured.
-    """
+    """Setting any TLS_*_FILE variable requires all three."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     stub = bin_dir / "gunicorn"
@@ -104,11 +99,17 @@ def test_a_partial_tls_env_set_stops_startup(tmp_path):
         "WORKERS": "1",
         "PORT": "3000",
     }
+    tls_vars = {
+        "TLS_CERT_FILE": "/tls/tls.crt",
+        "TLS_KEY_FILE": "/tls/tls.key",
+        "TLS_CA_FILE": "/tls/ca.crt",
+    }
     partial_sets = [
-        {"TLS_CERT_FILE": "/tls/tls.crt"},
-        {"TLS_KEY_FILE": "/tls/tls.key", "TLS_CA_FILE": "/tls/ca.crt"},
-        {"TLS_CERT_FILE": "/tls/tls.crt", "TLS_KEY_FILE": "/tls/tls.key"},
+        {name: tls_vars[name] for name in names}
+        for size in (1, 2)
+        for names in itertools.combinations(tls_vars, size)
     ]
+    assert len(partial_sets) == 6
     for tls_env in partial_sets:
         result = subprocess.run(
             [str(ENTRYPOINT)],
@@ -119,7 +120,7 @@ def test_a_partial_tls_env_set_stops_startup(tmp_path):
         )
         assert result.returncode != 0, tls_env
         assert "all-or-none" in result.stderr
-        for var in {"TLS_CERT_FILE", "TLS_KEY_FILE", "TLS_CA_FILE"} - set(tls_env):
+        for var in tls_vars.keys() - tls_env.keys():
             assert var in result.stderr
 
 
@@ -129,7 +130,7 @@ def test_served_connections_are_reused_across_requests(tmp_path):
     Runs the actual entrypoint against a trivial WSGI app (gunicorn resolves
     ``app:create_app()`` from the working directory), then asserts the server
     holds the connection open between requests instead of answering
-    ``Connection: close`` — the regression this file exists to prevent.
+    ``Connection: close``.
     """
     pytest.importorskip("gunicorn")
     (tmp_path / "app.py").write_text(
@@ -173,10 +174,9 @@ def test_served_connections_are_reused_across_requests(tmp_path):
             pytest.fail(f"gunicorn never started listening:\n{log_path.read_text()}")
 
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-        # Two layers of evidence, because http.client reconnects transparently
-        # after a server-side close: the Connection header states the server's
-        # contract, and the socket identity proves actual reuse — a reconnect
-        # creates a new socket object with a new ephemeral local port.
+        # http.client reconnects transparently after a server-side close, so
+        # also check the socket identity: a reconnect creates a new socket
+        # with a new ephemeral local port.
         conn.request("GET", "/")
         response = conn.getresponse()
         assert response.status == 200

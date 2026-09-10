@@ -5,9 +5,8 @@
 # carry file paths, never certificate material.
 #
 # The three variables are all-or-none: setting any one requires all three,
-# and a partial set stops startup naming what is missing. In particular,
-# TLS_KEY_FILE and TLS_CA_FILE without TLS_CERT_FILE would otherwise serve
-# plaintext while the operator believes TLS is configured.
+# and a partial set stops startup naming what is missing. Without this check,
+# TLS_KEY_FILE and TLS_CA_FILE without TLS_CERT_FILE would serve plaintext.
 if [ -n "${TLS_CERT_FILE}${TLS_KEY_FILE}${TLS_CA_FILE}" ]; then
   missing=""
   [ -n "$TLS_CERT_FILE" ] || missing="$missing TLS_CERT_FILE"
